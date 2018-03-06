@@ -84,18 +84,15 @@ func Stat(d []byte, tag string) (error, interface{}) {
 	if req.Span != 0 {
 		req.IsSpan = true
 	}
-	mgos := utils.MgoSessionDupl(tag)
-	defer mgos.Close()
-	mc := mgos.DB(models.MongoDT + tag).C(req.Term)
-	query := bson.M{}
+	session := utils.DB(tag)
+	// mc := mgos.DB(models.MongoDT + tag).C(req.Term)
+	indexs := ModelData{}
 	if len(req.Index) > 0 {
 		for k, v := range req.Index {
-			query["index."+k] = v
+			indexs["index."+k] = v
 		}
 	}
-	if len(req.DataQuery) > 0 {
-		query["data"] = bson.M{"$elemMatch": req.DataQuery}
-	}
+
 	//获取数据
 	rdsconn := utils.NewRedisConn(tag)
 	defer rdsconn.Close()
@@ -131,16 +128,22 @@ func Stat(d []byte, tag string) (error, interface{}) {
 	}
 	//redis end
 	//mgo start
-	datas := []SnowData{}
-	err = mc.Find(query).All(&datas)
+	datas := []Model{}
+	err = session.Table(NewModel(tag, req.Term).TableName()).Where("index <@ ?::jsonb and data <@ ?::jsonb", string(utils.JsonEncode(indexs, false)), string(utils.JsonEncode(req.DataQuery, false))).Find(&datas).Error
+	if err != nil {
+		fmt.Println("Tag:", tag, "Term:", req.Term)
+		panic(err)
+	}
 	if len(datas) > 0 {
 		for _, data := range datas {
 			groupkey := req.GroupKeyMgo(data.Index)
 			for _, v := range data.Data {
-				if utils.TInt64(v["s_time"]) >= req.STime && (utils.TInt64(v["e_time"]) <= req.ETime || req.ETime == 0) {
-					v["@groupkey"] = groupkey
-					v["@index"] = data.Index
-					tl = append(tl, v)
+				if v.Check(req.DataQuery) {
+					if utils.TInt64(v["s_time"]) >= req.STime && (utils.TInt64(v["e_time"]) <= req.ETime || req.ETime == 0) {
+						v["@groupkey"] = groupkey
+						v["@index"] = data.Index
+						tl = append(tl, v)
+					}
 				}
 			}
 		}

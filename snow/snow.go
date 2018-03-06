@@ -8,8 +8,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"labix.org/v2/mgo/bson"
 )
 
 type SnowSys struct {
@@ -29,17 +27,6 @@ type rwmutex struct {
 func init() {
 	//snowlock = rwmutex{m: map[string]*sync.RWMutex{}}
 	snowlock = rwmutex{l: new(sync.Mutex)}
-}
-
-type SnowData struct {
-	Key   string                   `json:"s_key" bson:"s_key"`
-	STime int64                    `json:"s_time" bson:"s_time"`
-	ETime int64                    `json:"e_time" bson:"e_time"`
-	Data  []map[string]interface{} `json:"data" bson:"data"`
-	Index map[string]interface{}
-	Term  string
-	Tag   string
-	Query bson.M `bson:"-"`
 }
 
 func NeedRotate(snowsys *SnowSys, snow models.Snow) (bl bool) {
@@ -92,26 +79,23 @@ func Rotate(snowsys *SnowSys, snows []models.Snow) {
 			dm[string(tb[i].([]uint8))], _ = strconv.ParseInt(string(tb[i+1].([]uint8)), 10, 64)
 		}
 		now := snowsys.Now
-		session := utils.MgoSessionDupl(tag)
-		defer session.Close()
-
-		mc := session.DB(models.MongoDT + tag).C(term)
-		var data SnowData
+		session := utils.DB(tag)
+		data := NewModel(tag, term)
 		var lasttime int64
-		retatedata := []map[string]interface{}{}
+		retatedata := ModelDatas{}
 		for sk, s := range snows {
 			key := snowsys.Key + "_" + fmt.Sprintf("%d", s.Interval) + "_" + s.InterValDuration
 			if sk == 0 {
-				mc.Find(bson.M{"s_key": key}).One(&data)
-				data.ETime = dm["e_time"].(int64)
-				data.STime = utils.DurationMap[s.TimeoutDuration+"l"](data.ETime, s.Timeout)
-				td := []map[string]interface{}{}
+				session.Where("key = ?", key).Find(&data)
+				data.EndTime = dm["e_time"].(int64)
+				data.StartTime = utils.DurationMap[s.TimeoutDuration+"l"](data.EndTime, s.Timeout)
+				td := ModelDatas{}
 				data.Data = append(data.Data, dm)
 				retatedata = data.Data
-				lasttime = data.STime
+				lasttime = data.StartTime
 				for k, v := range data.Data {
 					if d, ok := v["s_time"]; ok {
-						if utils.TInt64(d) >= data.STime {
+						if utils.TInt64(d) >= data.StartTime {
 							td = data.Data[k:]
 							retatedata = data.Data[:k]
 							break
@@ -126,22 +110,25 @@ func Rotate(snowsys *SnowSys, snows []models.Snow) {
 					data.Term = term
 				}
 				//cinfo, err := mc.Upsert(bson.M{"s_key": key}, bson.M{"$set": bson.M{"s_time": data.STime, "e_time": data.ETime, "tag": tag, "term": term, "data": td, "index": snowsys.Index}})
-				mc.Upsert(bson.M{"s_key": key}, data)
+				//mc.Upsert(bson.M{"s_key": key}, data)
+				if err := session.Where("key = ?", key).Save(&data).Error; err != nil {
+					panic(err)
+				}
 				if len(retatedata) == 0 {
 					break
 				}
 			} else {
-				data = SnowData{}
-				mc.Find(bson.M{"s_key": key}).One(&data)
-				data.ETime = lasttime
-				data.STime = utils.DurationMap[s.TimeoutDuration+"l"](data.ETime, s.Timeout)
-				lasttime = data.STime
+				data = NewModel(tag, term)
+				session.Where("key = ?", key).Find(&data)
+				data.EndTime = lasttime
+				data.StartTime = utils.DurationMap[s.TimeoutDuration+"l"](data.EndTime, s.Timeout)
+				lasttime = data.StartTime
 				ttt := retatedata
-				td := []map[string]interface{}{}
+				td := ModelDatas{}
 				retatedata = data.Data
 				for k, v := range data.Data {
 					if d, ok := v["s_time"]; ok {
-						if utils.TInt64(d) >= data.STime {
+						if utils.TInt64(d) >= data.StartTime {
 							td = data.Data[k:]
 							retatedata = data.Data[:k]
 							break
@@ -171,7 +158,7 @@ func Rotate(snowsys *SnowSys, snows []models.Snow) {
 						}
 					}
 					if !o {
-						if v["s_time"].(int64) >= data.STime {
+						if v["s_time"].(int64) >= data.StartTime {
 							td = append(td, v)
 						} else {
 							retatedata = append(retatedata, v)
@@ -179,28 +166,43 @@ func Rotate(snowsys *SnowSys, snows []models.Snow) {
 
 					}
 				}
-				mc.Upsert(bson.M{"s_key": key}, bson.M{"$set": bson.M{"s_time": data.STime, "e_time": data.ETime, "tag": tag, "term": term, "data": td, "index": snowsys.Index}})
+				data.Data = td
+				data.Indexs(snowsys.Index)
+				if err := session.Where("key = ?", key).Save(&data).Error; err != nil {
+					panic(err)
+				}
 				if len(retatedata) == 0 {
 					break
 				}
 			}
 		}
 		if len(retatedata) > 0 {
-			tmp := bson.M{}
+
+			data = NewModel(tag, term)
+			if err := session.Where("key = ?", snowsys.Key).Find(&data).Error; err != nil {
+				panic(err)
+			}
+
 			for _, v := range retatedata {
 				for k1, v1 := range v {
 					if k1 == "s_time" || k1 == "e_time" {
 						continue
 					}
-					if v2, ok := tmp[k1]; ok {
-						tmp[k1] = utils.TFloat64(v2) + utils.TFloat64(v1)
-					} else {
-						tmp[k1] = v1
-					}
+					// if v2, ok := tmp[k1]; ok {
+					// 	tmp[k1] = utils.TFloat64(v2) + utils.TFloat64(v1)
+					// } else {
+					// 	tmp[k1] = v1
+					// }
+					data.Data[0][k1] = utils.TFloat64(data.Data[0][k1]) + utils.TFloat64(v1)
 				}
 			}
-			mc.Upsert(bson.M{"s_key": snowsys.Key}, bson.M{"$inc": tmp, "$set": bson.M{
-				"e_time": now, "tag": tag, "term": term, "index": snowsys.Index}})
+			data.EndTime = now
+			data.Indexs(snowsys.Index)
+			if err := session.Where("key = ?", snowsys.Key).Save(&data).Error; err != nil {
+				panic(err)
+			}
+			// mc.Upsert(bson.M{"s_key": snowsys.Key}, bson.M{"$inc": tmp, "$set": bson.M{
+			// 	"e_time": now, "tag": tag, "term": term, "index": snowsys.Index}})
 
 		}
 	}(tb1)

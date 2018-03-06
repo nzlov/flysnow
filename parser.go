@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 )
@@ -65,6 +67,17 @@ func main() {
 	copyMainFile()
 	parserJsonFile(DataPath)
 	parserJson()
+
+	tmpfiles, err := ioutil.ReadDir(TmpPath)
+	if err != nil {
+		panic(err)
+	}
+	for _, f := range tmpfiles {
+		err = exec.Command("go", "fmt", filepath.Join(TmpPath, f.Name())).Run()
+		if err != nil {
+			panic(err)
+		}
+	}
 	fmt.Println("parser finish")
 }
 

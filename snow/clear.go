@@ -4,18 +4,16 @@ import (
 	"flysnow/models"
 	"flysnow/utils"
 	"fmt"
-
-	"gopkg.in/mgo.v2/bson"
 )
 
 type ClearReq struct {
-	TagTerms map[string][]string `json:"tag_terms" `
-	Query    bson.M              `json:"query"`
+	TagTerms map[string][]string    `json:"tag_terms" `
+	Query    map[string]interface{} `json:"query"`
 }
 type clearList struct {
-	Tag, Term  string
-	RdsKey     string
-	MongoQuery bson.M
+	Tag, Term string
+	RdsKey    string
+	Query     map[string]interface{}
 }
 
 func Clear(body []byte) (error, int) {
@@ -28,12 +26,12 @@ func Clear(body []byte) (error, int) {
 	//解析需要清理的统计项
 	var find bool
 	var rdskey string
-	var query bson.M
+	var query map[string]interface{}
 	for tag, terms := range req.TagTerms {
 		for _, term := range terms {
 			if termconfig, ok := models.TermConfigMap[tag][term]; ok {
 				rdskey = fmt.Sprintf("%s_%s_*", models.RedisKT, tag)
-				query = bson.M{}
+				query = map[string]interface{}{}
 				for key, value := range req.Query {
 					find = false
 					for _, k := range termconfig.Key {
@@ -57,7 +55,7 @@ func Clear(body []byte) (error, int) {
 	var key string
 
 	for _, clear := range list {
-		session := utils.MgoSessionDupl(clear.Tag)
+		session := utils.DB(clear.Tag)
 		//clear redis
 		rdsconn := utils.NewRedisConn(clear.Tag)
 		keys, _ := rdsconn.Dos("KEYS", clear.RdsKey)
@@ -67,9 +65,9 @@ func Clear(body []byte) (error, int) {
 		}
 		rdsconn.Close()
 		//clear mongo
-		session.DB(models.MongoDT + clear.Tag).C(clear.Term).RemoveAll(clear.MongoQuery)
-		session.Close()
-
+		if err := session.Where("index <@ ?::jsonb", string(utils.JsonEncode(clear.Query, false))).Delete(NewModel(clear.Tag, clear.Term)).Error; err != nil {
+			panic(err)
+		}
 	}
 	return nil, 0
 }

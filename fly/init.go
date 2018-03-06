@@ -39,7 +39,7 @@ func Init() {
 		handleFuncs[1][tag] = stat
 		//handle.initchan()
 		utils.InitRedis(tag)
-		utils.MgoInit(tag)
+		utils.DBInit(tag)
 	}
 	//每天处理一次 rds key
 	go ClearRedisKey(models.TagList[0])
