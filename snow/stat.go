@@ -78,6 +78,7 @@ func Stat(d []byte, tag string) (error, interface{}) {
 	if err != nil {
 		return err, nil
 	}
+	fmt.Printf("%+v\n", req)
 	if len(req.Group) != 0 {
 		req.IsGroup = true
 	}
@@ -87,9 +88,10 @@ func Stat(d []byte, tag string) (error, interface{}) {
 	session := utils.DB(tag)
 	// mc := mgos.DB(models.MongoDT + tag).C(req.Term)
 	indexs := ModelData{}
+
 	if len(req.Index) > 0 {
 		for k, v := range req.Index {
-			indexs["index."+k] = v
+			indexs[k] = v
 		}
 	}
 
@@ -126,10 +128,11 @@ func Stat(d []byte, tag string) (error, interface{}) {
 			}
 		}
 	}
+
 	//redis end
 	//mgo start
 	datas := []Model{}
-	err = session.Table(NewModel(tag, req.Term).TableName()).Where("index <@ ?::jsonb and data <@ ?::jsonb", string(utils.JsonEncode(indexs, false)), string(utils.JsonEncode(req.DataQuery, false))).Find(&datas).Error
+	err = session.Table(NewModel(tag, req.Term).TableName()).Where("index @> ?::jsonb", string(utils.JsonEncode(indexs, false))).Find(&datas).Error
 	if err != nil {
 		fmt.Println("Tag:", tag, "Term:", req.Term)
 		panic(err)
@@ -137,14 +140,15 @@ func Stat(d []byte, tag string) (error, interface{}) {
 	if len(datas) > 0 {
 		for _, data := range datas {
 			groupkey := req.GroupKeyMgo(data.Index)
+			data.Data.Check(req.DataQuery)
+			fmt.Printf("%+v\n", data.Data)
 			for _, v := range data.Data {
-				if v.Check(req.DataQuery) {
-					if utils.TInt64(v["s_time"]) >= req.STime && (utils.TInt64(v["e_time"]) <= req.ETime || req.ETime == 0) {
-						v["@groupkey"] = groupkey
-						v["@index"] = data.Index
-						tl = append(tl, v)
-					}
+				if utils.TInt64(v["s_time"]) >= req.STime && (utils.TInt64(v["e_time"]) <= req.ETime || req.ETime == 0) {
+					v["@groupkey"] = groupkey
+					v["@index"] = data.Index
+					tl = append(tl, v)
 				}
+
 			}
 		}
 	}

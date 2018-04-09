@@ -38,7 +38,7 @@ func Clear(body []byte) (error, int) {
 						if "@"+key == k {
 							find = true
 							rdskey += fmt.Sprintf("@%s_%s", key, value)
-							query["index."+key] = value
+							query[key] = value
 						}
 					}
 					if !find {
@@ -65,7 +65,7 @@ func Clear(body []byte) (error, int) {
 		}
 		rdsconn.Close()
 		//clear mongo
-		if err := session.Where("index <@ ?::jsonb", string(utils.JsonEncode(clear.Query, false))).Delete(NewModel(clear.Tag, clear.Term)).Error; err != nil {
+		if err := session.Where("index @> ?::jsonb", string(utils.JsonEncode(clear.Query, false))).Delete(NewModel(clear.Tag, clear.Term)).Error; err != nil {
 			panic(err)
 		}
 	}

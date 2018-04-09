@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"flysnow/models"
 	"flysnow/utils"
 
+	"github.com/nzlov/jsonql"
 	"gopkg.in/mgo.v2/bson"
 )
 
@@ -76,16 +78,86 @@ func (j *ModelDatas) Scan(value interface{}) error {
 	return json.Unmarshal(bytes, j)
 }
 
-func (j ModelData) Check(d bson.M) bool {
-	if len(j) >= len(d) {
-		for k, v := range d {
-			if jv, ok := j[k]; !ok {
-				return false
-			} else if v != jv {
-				return false
-			}
-		}
-		return true
+func (b *ModelDatas) Check(s bson.M) {
+
+	data, err := json.Marshal(b)
+	if err != nil {
+		fmt.Println("Err0:", err)
+		return
 	}
-	return false
+	parser, err := jsonql.NewStringQuery(string(data))
+
+	if err != nil {
+		fmt.Println("Err1:", err)
+		return
+	}
+	ssss := BsonToQuery(s)
+	str, err := parser.Query(ssss)
+	if err != nil {
+		fmt.Println("Err2:", err)
+		return
+	}
+
+	data, err = json.Marshal(str)
+	if err != nil {
+		fmt.Println("Err3:", err)
+		return
+	}
+	fmt.Println("JSON:", string(data))
+	err = json.Unmarshal(data, b)
+	if err != nil {
+		fmt.Println("Err4:", err)
+	}
+}
+
+func MapToBson(m interface{}) bson.M {
+	b := bson.M{}
+	data, err := json.Marshal(m)
+	if err != nil {
+		fmt.Println("Err0:", err)
+		return b
+	}
+	json.Unmarshal(data, b)
+	return b
+}
+
+func BsonToQuery(s bson.M) string {
+	str := ""
+
+	for k, v := range s {
+		switch k {
+		case "$or":
+			switch t := v.(type) {
+			case []bson.M:
+				for _, v1 := range t {
+					str += fmt.Sprintf("|| %v", BsonToQuery(v1))
+				}
+			case []interface{}:
+				for _, v1 := range t {
+					str += fmt.Sprintf("|| %v", BsonToQuery(MapToBson(v1)))
+				}
+			}
+			str = strings.Trim(str, "||")
+		case "$ne":
+			return fmt.Sprintf("!= %v ", v)
+		case "$gt":
+			return fmt.Sprintf(">%v ", v)
+		case "$lt":
+			return fmt.Sprintf("<%v ", v)
+		case "$gte":
+			return fmt.Sprintf(">=%v ", v)
+		case "$lte":
+			return fmt.Sprintf("<=%v ", v)
+		default:
+			switch t := v.(type) {
+			case bson.M:
+				str += fmt.Sprintf("&& %v%v ", k, BsonToQuery(t))
+			default:
+				str += fmt.Sprintf("&& %v=%v ", k, t)
+			}
+
+		}
+
+	}
+	return strings.Trim(str, "&&")
 }
